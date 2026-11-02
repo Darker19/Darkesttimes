@@ -71,7 +71,7 @@ fwrite($fp, json_encode($teller));
 flock($fp, LOCK_UN);
 fclose($fp);
 if ($teVeel) {
-    antwoord(429, 'Er zijn net veel berichten verstuurd. Probeer het later nog eens, of mail naar ' . getenv('MAIL_TO') . '.');
+    antwoord(429, 'Er zijn net veel berichten verstuurd. Probeer het later nog eens, of mail naar ' . getenv('MAIL_FROM') . '.');
 }
 
 $tekst = "Nieuw bericht via het contactformulier van darkesttimes.nl\n\n"
@@ -104,7 +104,7 @@ $status = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
 if ($status < 200 || $status >= 300) {
     // Komt in `docker compose logs` terecht; zonder de inhoud van het bericht
     error_log("Brevo gaf status $status: " . ($resultaat ?: curl_error($ch)));
-    antwoord(502, 'Versturen lukte even niet. Probeer het later nog eens, of mail naar ' . getenv('MAIL_TO') . '.');
+    antwoord(502, 'Versturen lukte even niet. Probeer het later nog eens, of mail naar ' . getenv('MAIL_FROM') . '.');
 }
 
 antwoord(200, 'Bedankt! Je bericht is verstuurd. Ik reageer zo snel mogelijk.');
