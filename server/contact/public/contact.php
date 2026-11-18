@@ -1,10 +1,13 @@
 <?php
-// Contactformulier van darkesttimes.nl: controleert het bericht en verstuurt het via de Brevo-API.
-// Caddy stuurt POST /api/contact hierheen. Sleutel en adressen staan in .env (zie compose.yml).
+// Contactformulier van darkesttimes.nl: controleert het bericht en verstuurt het via Migadu (formulier@ -> info@).
+// Caddy stuurt POST /api/contact hierheen. Wachtwoord en adressen staan in .env (zie compose.yml).
+// Lukt versturen niet, of is de daglimiet bereikt, dan wordt het bericht bewaard en elk uur opnieuw geprobeerd
+// (lib/bewaard-versturen.php). De bezoeker krijgt dan gewoon "verstuurd" te zien.
+
+require '/app/lib/mail.php';
 
 const MAX_PER_IP_PER_UUR = 5;
-const MAX_PER_DAG = 50;          // ruim onder de 300/dag van het gratis Brevo-plan
-const TELLER = '/app/data/teller.json';
+const TELLER = '/app/data/teller.json';   // per bezoeker per uur; de daglimiet zit in lib/mail.php
 
 $wilJson = str_contains($_SERVER['HTTP_ACCEPT'] ?? '', 'application/json');
 
@@ -49,21 +52,19 @@ if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
 $naam = str_replace(["\r", "\n"], ' ', $naam);
 $branche = str_replace(["\r", "\n"], ' ', $branche);
 
-// Teller tegen misbruik: per IP-adres per uur, en voor de hele site per dag
+// Teller tegen misbruik: per IP-adres per uur
 $fp = fopen(TELLER, 'c+');
 flock($fp, LOCK_EX);
 $teller = json_decode(stream_get_contents($fp) ?: '{}', true) ?: [];
 $nu = time();
 $ip = hash('sha256', $_SERVER['REMOTE_ADDR'] ?? '');
-$vandaag = date('Y-m-d');
-if (($teller['dag'] ?? '') !== $vandaag) {
-    $teller = ['dag' => $vandaag, 'aantal' => 0, 'ip' => []];
+foreach ($teller['ip'] ?? [] as $k => $tijden) {
+    $teller['ip'][$k] = array_values(array_filter($tijden, fn($t) => $t > $nu - 3600));
+    if (!$teller['ip'][$k]) unset($teller['ip'][$k]);
 }
-$teller['ip'][$ip] = array_values(array_filter($teller['ip'][$ip] ?? [], fn($t) => $t > $nu - 3600));
-$teVeel = count($teller['ip'][$ip]) >= MAX_PER_IP_PER_UUR || $teller['aantal'] >= MAX_PER_DAG;
+$teVeel = count($teller['ip'][$ip] ?? []) >= MAX_PER_IP_PER_UUR;
 if (!$teVeel) {
     $teller['ip'][$ip][] = $nu;
-    $teller['aantal']++;
 }
 ftruncate($fp, 0);
 rewind($fp);
@@ -71,40 +72,16 @@ fwrite($fp, json_encode($teller));
 flock($fp, LOCK_UN);
 fclose($fp);
 if ($teVeel) {
-    antwoord(429, 'Er zijn net veel berichten verstuurd. Probeer het later nog eens, of mail naar ' . getenv('MAIL_FROM') . '.');
+    antwoord(429, 'Er zijn net veel berichten verstuurd. Probeer het later nog eens, of mail naar ' . getenv('MAIL_TO') . '.');
 }
 
-$tekst = "Nieuw bericht via het contactformulier van darkesttimes.nl\n\n"
-    . "Naam:    $naam\n"
-    . "E-mail:  $email\n"
-    . "Branche: " . ($branche !== '' ? $branche : '-') . "\n\n"
-    . "$bericht\n";
+$b = ['naam' => $naam, 'email' => $email, 'branche' => $branche, 'bericht' => $bericht, 'tijd' => $nu];
 
-$ch = curl_init('https://api.brevo.com/v3/smtp/email');
-curl_setopt_array($ch, [
-    CURLOPT_POST => true,
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_TIMEOUT => 15,
-    CURLOPT_HTTPHEADER => [
-        'api-key: ' . getenv('BREVO_API_KEY'),
-        'Content-Type: application/json',
-        'Accept: application/json',
-    ],
-    CURLOPT_POSTFIELDS => json_encode([
-        'sender'      => ['name' => 'Darkesttimes website', 'email' => getenv('MAIL_FROM')],
-        'to'          => [['email' => getenv('MAIL_TO')]],
-        'replyTo'     => ['email' => $email, 'name' => $naam],
-        'subject'     => "Contactformulier: $naam",
-        'textContent' => $tekst,
-    ]),
-]);
-$resultaat = curl_exec($ch);
-$status = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-
-if ($status < 200 || $status >= 300) {
-    // Komt in `docker compose logs` terecht; zonder de inhoud van het bericht
-    error_log("Brevo gaf status $status: " . ($resultaat ?: curl_error($ch)));
-    antwoord(502, 'Versturen lukte even niet. Probeer het later nog eens, of mail naar ' . getenv('MAIL_FROM') . '.');
+// Daglimiet voor formulier@: daarboven bewaren in plaats van mailen.
+if (dagTeller(1) < 0) {
+    bewaar($b, 'daglimiet');
+} elseif (!verstuur($b)) {
+    bewaar($b, 'versturen mislukt');
 }
 
 antwoord(200, 'Bedankt! Je bericht is verstuurd. Ik reageer zo snel mogelijk.');

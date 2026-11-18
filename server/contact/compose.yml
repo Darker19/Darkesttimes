@@ -1,7 +1,8 @@
 # Contactformulier van darkesttimes.nl. Draait op de VPS in /srv/contact.
 # Caddy stuurt POST /api/contact naar deze container (contact-php-1).
 # Bijwerken: deze map naar /srv/contact kopiëren en `docker compose up -d` (gaat niet via de deploy).
-# .env (niet in git) bevat BREVO_API_KEY, MAIL_FROM en MAIL_TO, zie .env.example.
+# Verstuurt via Migadu: formulier@darkesttimes.nl -> info@darkesttimes.nl.
+# .env (niet in git) bevat SMTP_HOST, SMTP_USER, SMTP_PASS, MAIL_FROM en MAIL_TO, zie .env.example.
 services:
   php:
     image: php:8.4-fpm-alpine
@@ -9,6 +10,7 @@ services:
     env_file: .env
     volumes:
       - ./public:/app/public:ro
+      - ./lib:/app/lib:ro
       - ./data:/app/data
       - ./php.ini:/usr/local/etc/php/conf.d/contact.ini:ro
     networks:
